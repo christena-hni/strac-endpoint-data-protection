@@ -33,6 +33,12 @@ striprtf==0.0.28
 watchdog==6.0.0
 unrar==0.4
 
+# GenAI manager (TLS-terminating proxy for observability + audit of third-
+# party GenAI tools). cryptography is required for CA generation; mitmproxy
+# embeds the HTTPS proxy in-process.
+cryptography==43.0.1
+mitmproxy==11.0.0
+
 #
 # macOS specific requirements
 macos-notifications==0.2.1; sys_platform == 'darwin'
@@ -40,7 +46,7 @@ ocrmac==1.0.0; sys_platform == 'darwin'
 
 #
 # windows specific requirements
-
+pywin32==307; sys_platform == 'win32'
 
 #
 # linux specific requirements

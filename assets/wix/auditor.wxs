@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  WiX source for the Windows Auditor MSI. Keep UpgradeCode stable; bump
+  ProductVersion via the -dVersion flag from the Makefile. The CA install
+  runs as a deferred custom action (requires elevation) immediately after
+  the files are written; uninstall is the mirror image.
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*"
+           Name="Strac Auditor"
+           Language="1033"
+           Version="$(var.Version)"
+           Manufacturer="Strac Inc."
+           UpgradeCode="B6B47F1C-6B8E-4B9A-9A2F-6E2A94BE2B54">
+    <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" />
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Strac Auditor is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="APPLICATIONFOLDER" Name="Strac">
+          <Directory Id="AuditorFolder" Name="Auditor">
+            <Component Id="AuditorExe" Guid="3C7E1A7A-6F8D-44E0-9A27-3A20ABF1C3E1">
+              <File Id="AuditorExeFile"
+                    Source="dist\windows\bin\auditor.exe"
+                    KeyPath="yes" />
+            </Component>
+            <Component Id="CaInstallPs1" Guid="8D9F4F97-A4CA-4F23-A1B0-24B0A1A8FCDA">
+              <File Id="CaInstallPs1File"
+                    Source="scripts\windows\install_ca.ps1"
+                    KeyPath="yes" />
+            </Component>
+            <Component Id="CaUninstallPs1" Guid="B7CB38D4-9D32-4D47-8D26-1C40739DDC4F">
+              <File Id="CaUninstallPs1File"
+                    Source="scripts\windows\uninstall_ca.ps1"
+                    KeyPath="yes" />
+            </Component>
+          </Directory>
+        </Directory>
+      </Directory>
+      <Directory Id="CommonAppDataFolder">
+        <Directory Id="ProgramDataAuditor" Name="auditor">
+          <Component Id="EmptyDataDir" Guid="57DAF0C3-4B98-4F9C-9D36-2BF3EB65AACC">
+            <CreateFolder />
+            <RemoveFolder Id="RemoveProgramDataAuditor" On="uninstall" />
+          </Component>
+        </Directory>
+      </Directory>
+    </Directory>
+
+    <Feature Id="Main" Title="Auditor Agent" Level="1">
+      <ComponentRef Id="AuditorExe" />
+      <ComponentRef Id="CaInstallPs1" />
+      <ComponentRef Id="CaUninstallPs1" />
+      <ComponentRef Id="EmptyDataDir" />
+    </Feature>
+
+    <!-- Custom actions: install CA after files, remove on uninstall -->
+    <CustomAction Id="InstallCA"
+                  ExeCommand='powershell.exe -ExecutionPolicy Bypass -File "[AuditorFolder]install_ca.ps1"'
+                  Directory="AuditorFolder"
+                  Execute="deferred"
+                  Return="ignore"
+                  Impersonate="no" />
+    <CustomAction Id="UninstallCA"
+                  ExeCommand='powershell.exe -ExecutionPolicy Bypass -File "[AuditorFolder]uninstall_ca.ps1"'
+                  Directory="AuditorFolder"
+                  Execute="deferred"
+                  Return="ignore"
+                  Impersonate="no" />
+
+    <InstallExecuteSequence>
+      <Custom Action="InstallCA" After="InstallFiles">NOT Installed</Custom>
+      <Custom Action="UninstallCA" Before="RemoveFiles">REMOVE="ALL"</Custom>
+    </InstallExecuteSequence>
+  </Product>
+</Wix>

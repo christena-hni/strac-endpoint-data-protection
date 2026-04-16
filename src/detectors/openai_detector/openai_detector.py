@@ -5,6 +5,20 @@ import os
 import httpx
 
 
+# =======================================================================
+# WARNING: DO NOT ENABLE FOR THE GENAI PIPELINE
+#
+# This detector classifies candidate text by POSTing it to api.openai.com.
+# Used from the GenAI manager, it would egress the exact data we're trying
+# to audit -- a defect that completely defeats the purpose of that feature.
+#
+# managers/genai/pipeline.py.FORBIDDEN_DETECTORS enforces this in code;
+# config.GENAI_ENABLED_DETECTORS reinforces it in config. Leave both alone.
+# Scanner's SCANNER_ENABLED_DETECTORS may continue to reference it for the
+# existing file-scanning use case.
+# =======================================================================
+
+
 class Detector:
     description = "OpenAI PHI/PII Detector"
     version = "1.0"

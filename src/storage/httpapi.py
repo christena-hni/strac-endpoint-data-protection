@@ -428,6 +428,51 @@ class StracApi:
             )
             return True
 
+    async def post_genai_event(self, payload: dict) -> bool:
+        """Send a GenAI interaction/finding summary to the Strac backend.
+
+        Unlike ``process_message`` (which hydrates its payload from a local
+        StracApiDocument row), the GenAI manager already has all the
+        context and just needs a thin HTTP wrapper that reuses the shared
+        endpoint, headers, retry, and logging plumbing.
+
+        Returns True on 2xx, False otherwise. Never raises.
+        """
+        try:
+            envelope = {
+                "resource_type": "GenAIEvent",
+                "remediation_type": "AUDIT",
+                "device_id": SYSTEM.uuid,
+                "logged_in_user": SYSTEM.current_user,
+                "event_id": str(uuid.uuid4()),
+                "event_date": datetime.now(timezone.utc).isoformat()[:-6] + "Z",
+                "app_name": "auditor-genai",
+                "payload": payload,
+            }
+            async with httpx.AsyncClient(verify=False) as async_client:
+                response = await async_client.post(
+                    STRAC_API_ENDPOINT_PROCESS_MESSAGE,
+                    headers=STRAC_API_HEADERS,
+                    json=envelope,
+                    timeout=self.TIMEOUT_SECONDS,
+                )
+                if response.status_code <= 299:
+                    self.logger.debug(
+                        "post_genai_event ok status=%s provider=%s",
+                        response.status_code,
+                        payload.get("provider"),
+                    )
+                    return True
+                self.logger.error(
+                    "post_genai_event failed status=%s body=%s",
+                    response.status_code,
+                    response.text[:500],
+                )
+                return False
+        except Exception as exc:
+            self.logger.error("post_genai_event exception=%s", exc)
+            return False
+
     async def process_document(self, file_access):
         """
         Process a single document through the complete workflow.
