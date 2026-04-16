@@ -20,6 +20,7 @@ from launchd import (
 )
 from managers.access import FSUsage
 from managers.browser import Browser
+from managers.genai.manager import GenAI
 from managers.network import Filter
 from managers.scanner import Scanner
 from managers.usb import UsbManager
@@ -54,6 +55,7 @@ SERVICE_CHOICES = [
     "downloads",
     "usb",
     "virtenv",
+    "genai",
 ]
 
 
@@ -109,6 +111,19 @@ class UsbManagerDaemon(Daemon):
             sys.exit(1)
 
 
+class GenAIManagerDaemon(Daemon):
+    def run(self):
+        genai = GenAI()
+        try:
+            initialize_db()
+            asyncio.run(genai.start())
+        except KeyboardInterrupt:
+            logger.info("\nShutting down...")
+        except Exception as e:
+            logger.error(f"Error starting the GenAIManagerDaemon: {str(e)}")
+            sys.exit(1)
+
+
 class VirtEnvManagerDaemon(Daemon):
     def run(self):
         virtenv = VirtEnv()
@@ -151,6 +166,12 @@ usb_manager_daemon = UsbManagerDaemon(
 virt_env_manager_daemon = VirtEnvManagerDaemon(
     pidfile=f"{config.SYSTEM.set_asset_path()}/auditor-virtenv.pid",
     svc_name="auditor-virtenv",
+    console=console,
+)
+
+genai_daemon = GenAIManagerDaemon(
+    pidfile=f"{config.SYSTEM.set_asset_path()}/auditor-genai.pid",
+    svc_name="auditor-genai",
     console=console,
 )
 
@@ -220,6 +241,13 @@ def start(service):
             )
             return
         virt_env_manager_daemon.start()
+    elif service == "genai":
+        if not config.GENAI_SERVICE_ENABLED:
+            console.print(
+                "[bold red]Your license does not support the [yellow]genai[/yellow] service. Please contact [blue]support@strac.io[/blue] for assistance.[/bold red]"
+            )
+            return
+        genai_daemon.start()
 
 
 @cli.command(help="Enable service daemon")
@@ -275,6 +303,14 @@ def enable(service):
             return
         # ensure any manually started instances are stopped
         virt_env_manager_daemon.stop()
+    elif service == "genai":
+        interval = 30  # near-realtime; the daemon itself is a long-running proxy
+        if not config.GENAI_SERVICE_ENABLED:
+            console.print(
+                "[bold red]Your license does not support the [yellow]genai[/yellow] service. Please contact [blue]support@strac.io[/blue] for assistance.[/bold red]"
+            )
+            return
+        genai_daemon.stop()
     # now install the launchd daemon
     install_launchd_daemon(service, interval)
     status = get_launchd_daemon_status(service)
@@ -336,6 +372,13 @@ def disable(service):
             return
         # ensure any manually started instances are stopped
         virt_env_manager_daemon.stop()
+    elif service == "genai":
+        if not config.GENAI_SERVICE_ENABLED:
+            console.print(
+                "[bold red]Your license does not support the [yellow]genai[/yellow] service. Please contact [blue]support@strac.io[/blue] for assistance.[/bold red]"
+            )
+            return
+        genai_daemon.stop()
     # now uninstall the launchd daemon
     uninstall_launchd_daemon(service)
     status = get_launchd_daemon_status(service)
@@ -411,6 +454,13 @@ def stop(service):
             )
             return
         virt_env_manager_daemon.stop()
+    elif service == "genai":
+        if not config.GENAI_SERVICE_ENABLED:
+            console.print(
+                "[bold red]Your license does not support the [yellow]genai[/yellow] service. Please contact [blue]support@strac.io[/blue] for assistance.[/bold red]"
+            )
+            return
+        genai_daemon.stop()
 
 
 @cli.command(help="Restart services")
@@ -472,6 +522,13 @@ def restart(service):
             )
             return
         virt_env_manager_daemon.restart()
+    elif service == "genai":
+        if not config.GENAI_SERVICE_ENABLED:
+            console.print(
+                "[bold red]Your license does not support the [yellow]genai[/yellow] service. Please contact [blue]support@strac.io[/blue] for assistance.[/bold red]"
+            )
+            return
+        genai_daemon.restart()
 
 
 @cli.command(help="Get status of services")
@@ -541,6 +598,13 @@ def status(service):
             )
             return
         virt_env_manager_daemon.status()
+    elif service == "genai":
+        if not config.GENAI_SERVICE_ENABLED:
+            console.print(
+                "[bold red]Your license does not support the [yellow]genai[/yellow] service. Please contact [blue]support@strac.io[/blue] for assistance.[/bold red]"
+            )
+            return
+        genai_daemon.status()
 
 
 # @cli.group(help="Configure services")
@@ -589,6 +653,7 @@ def uninstall_services():
     scanner_daemon.stop()
     usb_manager_daemon.stop()
     virt_env_manager_daemon.stop()
+    genai_daemon.stop()
 
     with console.status(
         f"[bold red]Uninstalling [blue]{config.APP_NAME}[/blue] [sky_blue1]v{config.APP_VERSION}[/sky_blue1]...",
@@ -621,16 +686,47 @@ def uninstall_services():
     )
 
 
-@cli.command(help="Show configuration, logs or system information.")
-@click.argument("option", type=click.Choice(["config", "logs", "system"]))
+@cli.command(help="Show configuration, logs, system information, or genai activity.")
+@click.argument("option", type=click.Choice(["config", "logs", "system", "genai"]))
 def show(option):
-    """Shows configuration or logs."""
+    """Shows configuration, logs, or recent GenAI activity."""
     if option == "config":
         show_config()
     elif option == "logs":
         show_logs()
     elif option == "system":
         show_system_info()
+    elif option == "genai":
+        show_genai_summary()
+
+
+def show_genai_summary():
+    """Quick last-24h summary of GenAI interactions + findings. Intended
+    for on-box triage; richer exports use `auditor genai report`."""
+    from storage.database import GenAIFinding, GenAIInteraction, initialize_db
+
+    initialize_db()
+    cutoff = _parse_since("24h")
+    interactions = list(
+        GenAIInteraction.select().where(GenAIInteraction.occurred_at >= cutoff)
+    )
+    findings = list(
+        GenAIFinding.select().join(GenAIInteraction).where(
+            GenAIInteraction.occurred_at >= cutoff
+        )
+    )
+
+    table = Table(title=f"GenAI last 24h (since {cutoff.isoformat()})")
+    table.add_column("Metric", style="cyan")
+    table.add_column("Value", style="magenta", justify="right")
+    by_provider = {}
+    for i in interactions:
+        by_provider[i.provider] = by_provider.get(i.provider, 0) + 1
+    table.add_row("interactions", str(len(interactions)))
+    table.add_row("findings", str(len(findings)))
+    for provider, count in sorted(by_provider.items(), key=lambda kv: -kv[1]):
+        table.add_row(f"  {provider}", str(count))
+    console.print(table)
 
 
 def show_system_info():
@@ -888,6 +984,146 @@ def configure_unblock_network_filter(domain):
         console.print(
             f"[yellow]An error occurred while removing the block rule for [blue]{domain}[/blue] from the [blue]{config.APP_NAME}[/blue] network-manager: {e}[/yellow]"
         )
+
+
+# ---------------------------------------------------------------------------
+# GenAI reporting
+# ---------------------------------------------------------------------------
+# `auditor genai ...` exposes the audit + reporting surface Security uses to
+# produce SOC2 evidence and to investigate incidents. Commands here are all
+# local read-only queries against the SQLite audit store; no network calls.
+
+
+def _parse_since(raw: str):
+    """Accept "24h", "7d", "30m", or an ISO-8601 string. Returns datetime."""
+    from datetime import datetime, timedelta, timezone
+
+    raw = (raw or "").strip()
+    if not raw:
+        return datetime.now(timezone.utc) - timedelta(days=1)
+    if raw[-1].lower() in "smhd" and raw[:-1].isdigit():
+        n = int(raw[:-1])
+        unit = raw[-1].lower()
+        delta = {
+            "s": timedelta(seconds=n),
+            "m": timedelta(minutes=n),
+            "h": timedelta(hours=n),
+            "d": timedelta(days=n),
+        }[unit]
+        return datetime.now(timezone.utc) - delta
+    try:
+        return datetime.fromisoformat(raw)
+    except ValueError as exc:
+        raise click.BadParameter(f"invalid --since value: {raw}") from exc
+
+
+@cli.group(help="GenAI observability + audit commands")
+def genai():
+    """Subgroup for GenAI reporting and operations."""
+
+
+@genai.command("providers", help="List configured GenAI providers.")
+def genai_providers():
+    from managers.genai.catalog import PROVIDERS
+
+    table = Table(title="GenAI providers")
+    table.add_column("Name", style="cyan")
+    table.add_column("Label", style="magenta")
+    table.add_column("Enabled", style="green")
+    table.add_column("Hosts (first 4)", style="white")
+    enabled = set(config.GENAI_ENABLED_PROVIDERS)
+    for p in PROVIDERS:
+        hosts = ", ".join(list(p.hostnames)[:4])
+        table.add_row(
+            p.name,
+            p.label or "",
+            "yes" if p.name in enabled else "no",
+            hosts,
+        )
+    console.print(table)
+
+
+@genai.command("report", help="Export GenAI interactions + findings.")
+@click.option("--since", default="24h", help='Window: "24h", "7d", or ISO-8601.')
+@click.option(
+    "--format",
+    "fmt",
+    default="table",
+    type=click.Choice(["table", "csv", "json"]),
+    help="Output format.",
+)
+@click.option(
+    "--only-findings",
+    is_flag=True,
+    default=False,
+    help="Include only interactions that triggered at least one finding.",
+)
+def genai_report(since, fmt, only_findings):
+    import csv as _csv
+    import io
+    import json as _json
+
+    from storage.database import GenAIFinding, GenAIInteraction, initialize_db
+
+    initialize_db()
+    cutoff = _parse_since(since)
+
+    q = GenAIInteraction.select().where(GenAIInteraction.occurred_at >= cutoff)
+    rows = []
+    for interaction in q:
+        findings = list(interaction.findings)  # type: ignore[attr-defined]
+        if only_findings and not findings:
+            continue
+        rows.append(
+            {
+                "occurred_at": interaction.occurred_at.isoformat(),
+                "user": interaction.user,
+                "device_id": interaction.device_id,
+                "provider": interaction.provider,
+                "model": interaction.model or "",
+                "host": interaction.host,
+                "url": interaction.url,
+                "prompt_chars": interaction.prompt_chars,
+                "bypass_reason": interaction.bypass_reason or "",
+                "findings": ";".join(
+                    f"{f.detector_name}:{f.finding_type}:{f.severity}"
+                    for f in findings
+                ),
+            }
+        )
+
+    if fmt == "json":
+        console.print_json(data=rows)
+        return
+    if fmt == "csv":
+        if not rows:
+            console.print("")
+            return
+        buf = io.StringIO()
+        writer = _csv.DictWriter(buf, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(rows)
+        click.echo(buf.getvalue())
+        return
+    # table
+    table = Table(title=f"GenAI interactions since {cutoff.isoformat()}")
+    table.add_column("When", style="cyan")
+    table.add_column("User", style="magenta")
+    table.add_column("Provider", style="green")
+    table.add_column("Host")
+    table.add_column("Chars", justify="right")
+    table.add_column("Findings", style="red")
+    for r in rows:
+        table.add_row(
+            r["occurred_at"],
+            r["user"],
+            r["provider"],
+            r["host"],
+            str(r["prompt_chars"]),
+            r["findings"] or "-",
+        )
+    console.print(table)
+    console.print(f"[dim]{len(rows)} interaction(s)[/dim]")
 
 
 if __name__ == "__main__":

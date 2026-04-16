@@ -81,7 +81,7 @@ endif
 #
 #	- base targets
 #	- these will default to the TEST Customer if no CUSTOMER is specified
-.PHONY: clean bump-version arm-macos-installers intel-macos-installers arm-ubuntu-installers intel-ubuntu-installers arm-redhat-installers intel-redhat-installers
+.PHONY: clean bump-version arm-macos-installers intel-macos-installers arm-ubuntu-installers intel-ubuntu-installers arm-redhat-installers intel-redhat-installers win-installers win-pyinstaller win-msi
 
 # original dual-arch target kept for reference
 macos-installers: clean check-credentials fetch-credentials bump-version pyinstaller macos-codesign macos-installer macos-productsign macos-submit-notarization build-result
@@ -96,6 +96,51 @@ arm-ubuntu-installers: check-credentials fetch-credentials linux-pyinstaller-arm
 intel-ubuntu-installers: check-credentials fetch-credentials linux-pyinstaller-x86_64 linux-deb-installer-x86_64 linux-build-result-x86_64-ubuntu
 arm-redhat-installers: check-credentials fetch-credentials linux-pyinstaller-arm64 linux-rpm-installer-arm64 linux-build-result-arm64-redhat
 intel-redhat-installers: check-credentials fetch-credentials linux-pyinstaller-x86_64 linux-rpm-installer-x86_64 linux-build-result-x86_64-redhat
+
+# -----------------------------------------------------------------------------
+# Windows installers (NEW in GenAI v1)
+#
+# Produces a signed MSI containing the PyInstaller-bundled agent plus the
+# PowerShell install_ca.ps1 that registers the GenAI proxy's root CA. Run
+# from a Windows build host; requires:
+#   - Python 3.12 + all requirements installed
+#   - PyInstaller (already in requirements-dev.txt)
+#   - WiX Toolset v3.x on PATH (candle.exe, light.exe)
+#   - signtool.exe (Windows SDK) with the codesigning cert imported
+#
+# Invocation:
+#   make CUSTOMER="clientA" win-installers
+# -----------------------------------------------------------------------------
+win-installers: win-pyinstaller win-msi
+	@echo "Windows installer ready in dist/windows/"
+
+win-pyinstaller:
+	@mkdir -p dist/windows
+	cd src && pyinstaller --noconfirm --clean \
+		--name auditor \
+		--onefile \
+		--hidden-import mitmproxy \
+		--hidden-import cryptography \
+		cli.py \
+		--distpath ../dist/windows/bin
+
+win-msi:
+	@echo "Building MSI with WiX..."
+	@if [ -z "$(CUSTOMER)" ]; then echo "CUSTOMER is required"; exit 1; fi
+	# Expects assets/wix/auditor.wxs to reference: dist/windows/bin/auditor.exe
+	# and scripts/windows/install_ca.ps1, scripts/windows/uninstall_ca.ps1.
+	# WiX config lives in a separate file rather than being generated here
+	# so Ops can hand-edit feature ids, upgrade codes, etc.
+	candle.exe -arch x64 \
+		-dCustomer="$(CUSTOMER)" \
+		-dVersion="$$(cat .version)" \
+		assets/wix/auditor.wxs \
+		-out dist/windows/auditor.wixobj
+	light.exe -ext WixUIExtension \
+		dist/windows/auditor.wixobj \
+		-out dist/windows/auditor-$(CUSTOMER).msi
+	signtool.exe sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 \
+		dist/windows/auditor-$(CUSTOMER).msi
 
 #
 #   ▗▄▖ ▗▖  ▗▖▗▄▄▄▖    ▗▄▄▖  ▗▄▖  ▗▄▄▖ ▗▄▄▖▗▖ ▗▖ ▗▄▖ ▗▄▄▖ ▗▄▄▄ 

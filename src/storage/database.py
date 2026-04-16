@@ -185,6 +185,65 @@ class StracApiDocument(BaseModel):
     detected_entities = TextField(null=True)
 
 
+# -- GenAI observability tables --------------------------------------------
+# One GenAIInteraction per prompt submission or file upload intercepted by
+# the GenAI manager's TLS-terminating proxy. See src/managers/genai/.
+
+
+class GenAIInteraction(BaseModel):
+    id = AutoField()
+    occurred_at = DateTimeField(default=datetime.now, index=True)
+    user = CharField(index=True)            # logged-in OS user
+    device_id = CharField(index=True)       # SYSTEM.uuid
+    provider = CharField(index=True)        # openai | anthropic | copilot | ...
+    model = CharField(null=True)            # parsed from request body
+    conversation_id = CharField(null=True, index=True)
+    direction = CharField(default="request")  # request | response
+    url = CharField()
+    method = CharField(default="POST")
+    host = CharField(index=True)
+    # SHA-256 of the extracted prompt text; the raw text is redacted before
+    # it hits the Strac backend unless a finding was raised (see runbook).
+    prompt_sha256 = CharField(null=True, index=True)
+    prompt_chars = IntegerField(default=0)
+    prompt_truncated = BooleanField(default=False)
+    prompt_preview = TextField(null=True)   # first ~512 redacted chars
+    # TLS-pinning or decrypt-failure cases pass through untouched and are
+    # surfaced here so operators can see coverage gaps.
+    bypass_reason = CharField(null=True)
+    status_code = IntegerField(null=True)
+    strac_event_id = CharField(null=True)
+    synced_to_strac = BooleanField(default=False, index=True)
+    created_at = DateTimeField(default=datetime.now)
+
+
+class GenAIUpload(BaseModel):
+    id = AutoField()
+    interaction = ForeignKeyField(GenAIInteraction, backref="uploads")
+    filename = CharField()
+    mime_type = CharField(null=True)
+    size_bytes = BigIntegerField(default=0)
+    sha256 = CharField(index=True)
+    strac_document_id = CharField(null=True)
+    created_at = DateTimeField(default=datetime.now)
+
+
+class GenAIFinding(BaseModel):
+    id = AutoField()
+    interaction = ForeignKeyField(GenAIInteraction, backref="findings")
+    upload = ForeignKeyField(GenAIUpload, backref="findings", null=True)
+    detector_name = CharField(index=True)
+    finding_type = CharField()
+    # We intentionally store a REDACTED copy of the matched content (hash +
+    # a masked preview) rather than the raw value, so the audit log itself
+    # doesn't become a secondary leak of sensitive data.
+    content_redacted = TextField()
+    content_sha256 = CharField(null=True)
+    context_redacted = TextField(null=True)
+    severity = CharField(default="medium")   # low | medium | high | critical
+    created_at = DateTimeField(default=datetime.now)
+
+
 class UsbDrive(BaseModel):
     name = CharField(unique=True)
     mount_point = CharField(unique=True)
@@ -223,6 +282,9 @@ def initialize_db():
                 AccessFSUsageLog,
                 BrowserDownloadRecord,
                 BrowserScanHistory,
+                GenAIFinding,
+                GenAIInteraction,
+                GenAIUpload,
                 HttpApiLog,
                 ManagerHistory,
                 ManagerStatus,

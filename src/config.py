@@ -335,6 +335,76 @@ VIRTENV_SERVICE_ENABLED = True
 VIRTENV_CHECK_INTERVAL = 300  # 5 minutes
 VIRTENV_SUPPORTED_VM_TYPES = ["vmware", "virtualbox", "parallels"]
 
+# -- GENAI MANAGER CONFIGURATION -- #
+# Observability + audit DLP for third-party GenAI tools (ChatGPT, Claude,
+# Microsoft Copilot, Gemini, Perplexity, etc). See docs/genai-dlp-runbook.md
+# and docs/genai-dlp-observability-plan.md for the full design.
+#
+# v1 posture: MONITOR + AUDIT ONLY. The proxy never blocks or mutates
+# traffic; it only records interactions + detector findings.
+GENAI_SERVICE_ENABLED = True
+
+# loopback listener used by mitmproxy. system HTTP(S) proxy is pushed via
+# MDM (Jamf profile on macOS, GPO/Intune on Windows) and must point here.
+GENAI_PROXY_HOST = "127.0.0.1"
+GENAI_PROXY_PORT = 8119
+
+# Root CA material is persisted under SYSTEM.set_asset_path() so it survives
+# upgrades. The filenames live beside the sqlite db.
+GENAI_CA_CERT_FILENAME = "strac-auditor-root.pem"
+GENAI_CA_KEY_FILENAME = "strac-auditor-root.key"
+GENAI_CA_COMMON_NAME = "Strac Auditor Root"
+GENAI_CA_VALIDITY_DAYS = 825  # Apple's max lifetime for trusted roots
+
+# Maximum prompt text we will hash + ship upstream. Long-tail prompts are
+# truncated (with a "truncated" flag) to bound memory + bandwidth.
+GENAI_PROMPT_MAX_CHARS = 200_000
+GENAI_UPLOAD_MAX_BYTES = 25 * 1024 * 1024  # 25 MiB
+
+# Providers we know how to parse. Each entry resolves to a module in
+# src/managers/genai/extractors/ with a matching parse() function. The
+# catalog itself lives at src/managers/genai/catalog.py.
+GENAI_ENABLED_PROVIDERS = [
+    "openai",      # chatgpt.com, chat.openai.com, api.openai.com
+    "anthropic",   # claude.ai, api.anthropic.com
+    "copilot",     # copilot.microsoft.com, copilot.cloud.microsoft
+    "gemini",      # gemini.google.com, generativelanguage.googleapis.com
+    "perplexity",  # www.perplexity.ai, api.perplexity.ai
+    "generic",     # regex-only fallback for you.com, poe.com, mistral.ai, etc.
+]
+
+# Detector bundle applied to every captured prompt + text upload. Mirrors
+# SCANNER_ENABLED_DETECTORS but intentionally EXCLUDES openai_detector
+# because it classifies by POSTing candidate text to api.openai.com -- the
+# exact egress we're trying to audit. See the runbook for details.
+GENAI_ENABLED_DETECTORS = [
+    "confidential_detector",
+    "email_detector",
+    "financial_account_detector",
+    "iban_detector",
+    "pci_detector",
+    "phone_number_detector",
+    "secrets_detector",
+    "source_code_detector",
+    "us_drivers_license_detector",
+    "us_passport_detector",
+    "us_ssn_detector",
+    "us_taxpayer_id_detector",
+]
+
+# Hosts that pin certificates and will refuse our CA. The proxy detects
+# pinning errors dynamically and adds the SNI here for the session, but
+# operators can seed the list with known offenders. Traffic to these hosts
+# passes through untouched with a "bypass_reason=pinning" audit record.
+GENAI_TLS_PINNING_BYPASS = [
+    # Known or suspected pinning at time of writing. Confirm during pilot.
+    "updates.anthropic.com",
+    "downloads.anthropic.com",
+]
+
+# How often to push queued interaction batches to the Strac API, seconds.
+GENAI_UPLOAD_FLUSH_INTERVAL = 15
+
 # -- LOCAL TESTING CONFIGURATION -- #
 # Development and testing paths
 # TEST_PATH = "/Users/strac-test/Documents/test_files"

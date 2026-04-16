@@ -1,0 +1,1 @@
+# No extra deps: heuristic detector using stdlib re.
